@@ -1,4 +1,5 @@
 var Cabal = require('cabal-core')
+var Client = require('cabal-client')
 var chalk = require('chalk')
 var collect = require('collect-stream')
 var Commander = require('./commands.js')
@@ -19,8 +20,6 @@ const HEADER_ROWS = 6
 
 function NeatScreen (props) {
   if (!(this instanceof NeatScreen)) return new NeatScreen(props)
-  var self = this
-
   this.archivesdir = props.archivesdir
   this.configFilePath = props.configFilePath
   this.homedir = props.homedir
@@ -28,7 +27,7 @@ function NeatScreen (props) {
   this.rootdir = props.rootdir
   this.config = props.config
   this.isExperimental = props.isExperimental
-  this.maxFeeds = props.maxFeeds
+  this.client = new Client(props)
 
   this.commander = Commander(this, props.cabals[0])
 
@@ -42,19 +41,19 @@ function NeatScreen (props) {
   this.neat.input.on('enter', (line) => this.commander.process(line))
 
   this.neat.input.on('tab', () => {
-    var line = self.neat.input.rawLine()
+    var line = this.neat.input.rawLine()
     if (line.length > 1 && line[0] === '/') {
       // command completion
       var soFar = line.slice(1)
       var commands = Object.keys(this.commander.commands)
       var matchingCommands = commands.filter(cmd => cmd.startsWith(soFar))
       if (matchingCommands.length === 1) {
-        self.neat.input.set('/' + matchingCommands[0])
+        this.neat.input.set('/' + matchingCommands[0])
       }
     } else {
       // nick completion
-      var users = Object.keys(self.state.cabal.client.users)
-        .map(key => self.state.cabal.client.users[key])
+      var users = Object.keys(this.state.cabal.client.users)
+        .map(key => this.state.cabal.client.users[key])
         .map(user => user.name || user.key.substring(0, 8))
         .sort()
       var pattern = (/^(\w+)$/)
@@ -62,24 +61,24 @@ function NeatScreen (props) {
 
       if (match) {
         users = users.filter(user => user.startsWith(match[0]))
-        if (users.length > 0) self.neat.input.set(users[0] + ': ')
+        if (users.length > 0) this.neat.input.set(users[0] + ': ')
       }
     }
   })
 
   this.neat.input.on('up', () => {
     if (self.commander.history.length) {
-      var command = self.commander.history.pop()
-      self.commander.history.unshift(command)
-      self.neat.input.set(command)
+      var command = this.commander.history.pop()
+      this.commander.history.unshift(command)
+      this.neat.input.set(command)
     }
   })
 
   this.neat.input.on('down', () => {
-    if (self.commander.history.length) {
-      var command = self.commander.history.shift()
-      self.commander.history.push(command)
-      self.neat.input.set(command)
+    if (this.commander.history.length) {
+      var command = this.commander.history.shift()
+      this.commander.history.push(command)
+      this.neat.input.set(command)
     }
   })
 
@@ -192,14 +191,14 @@ function NeatScreen (props) {
 }
 
 NeatScreen.prototype.initializeCabalClient = function (cabal) {
-  var self = this
-  cabal.client = {
-    channel: '!status',
-    channels: ['!status'],
-    messages: [],
-    user: { local: true, online: true, key: '' },
-    users: {}
-  }
+  this.client = new Client(cabal)
+  // {
+  //   channel: '!status',
+  //   channels: ['!status'],
+  //   messages: [],
+  //   user: { local: true, online: true, key: '' },
+  //   users: {}
+  // }
 
   this.commander.commands.help.call()
   self.state.cabal.client = cabal.client
@@ -286,18 +285,11 @@ NeatScreen.prototype.initializeCabalClient = function (cabal) {
 }
 
 NeatScreen.prototype.addCabal = function (key) {
-  var self = this
   if (!self.isExperimental) { return }
-  key = key.replace('cabal://', '').replace('cbl://', '').replace('dat://', '').replace(/\//g, '')
-  var db = this.archivesdir + key
-  var cabal = Cabal(db, key, { maxFeeds: this.maxFeeds })
-  cabal.ready(() => {
-    self.state.cabals.push(cabal)
-    cabal.swarm()
-    self.initializeCabalClient(cabal)
-    self.showCabal(cabal)
-    self.config.cabals = self.state.cabals.map((cabal) => cabal.key)
-    saveConfig(self.config, this.configFilePath)
+  this.client.addCabal(key).then((cabal) => {
+    this.showCabal(cabal)
+    this.config.cabals = self.state.cabals.map((cabal) => cabal.key)
+    saveConfig(this.config, this.configFilePath)
   })
 }
 
@@ -407,7 +399,6 @@ NeatScreen.prototype.render = function () {
 }
 
 NeatScreen.prototype.formatMessage = function (msg) {
-  var self = this
   var highlight = false
   /*
    msg = {
@@ -423,9 +414,10 @@ NeatScreen.prototype.formatMessage = function (msg) {
   */
   if (!msg.value.type) { msg.value.type = 'chat/text' }
   if (msg.value.content && msg.value.timestamp) {
-    var author
-    if (self.state && self.state.cabal.client.users && self.state.cabal.client.users[msg.key]) author = self.state.cabal.client.users[msg.key].name || self.state.cabal.client.users[msg.key].key.slice(0, 8)
-    else author = msg.key.slice(0, 8)
+    const users = this.client.getUsers(this.state && this.state.cabal)
+    const authorSource = users[msg.key] || msg
+
+    const author = authorSource.name || authorSource.key.slice(0, 8)
     var localNick = 'uninitialized'
     if (self.state) {
       localNick = self.state.cabal.client.user.name
