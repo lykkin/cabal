@@ -1,5 +1,3 @@
-var Cabal = require('cabal-core')
-var Client = require('cabal-client')
 var chalk = require('chalk')
 var collect = require('collect-stream')
 var Commander = require('./commands.js')
@@ -16,18 +14,13 @@ var markdown = require('./markdown-shim')
 var statusMessages = ['welcome to cabal', 'for more info visit https://github.com/cabal-club/cabal']
 statusMessages = statusMessages.map(util.wrapStatusMsg)
 
-const HEADER_ROWS = 6
-
 function NeatScreen (props) {
   if (!(this instanceof NeatScreen)) return new NeatScreen(props)
   this.archivesdir = props.archivesdir
   this.configFilePath = props.configFilePath
-  this.homedir = props.homedir
-  this.databaseVersion = props.databaseVersion
-  this.rootdir = props.rootdir
   this.config = props.config
   this.isExperimental = props.isExperimental
-  this.client = new Client(props)
+  this.client = props.client
 
   this.commander = Commander(this, props.cabals[0])
 
@@ -51,9 +44,10 @@ function NeatScreen (props) {
         this.neat.input.set('/' + matchingCommands[0])
       }
     } else {
+      const cabalUsers = this.client.getUsers()
       // nick completion
-      var users = Object.keys(this.state.cabal.client.users)
-        .map(key => this.state.cabal.client.users[key])
+      var users = Object.keys(cabalUsers)
+        .map(key => cabalUsers[key])
         .map(user => user.name || user.key.substring(0, 8))
         .sort()
       var pattern = (/^(\w+)$/)
@@ -67,7 +61,7 @@ function NeatScreen (props) {
   })
 
   this.neat.input.on('up', () => {
-    if (self.commander.history.length) {
+    if (this.commander.history.length) {
       var command = this.commander.history.pop()
       this.commander.history.unshift(command)
       this.neat.input.set(command)
@@ -104,7 +98,7 @@ function NeatScreen (props) {
 
   // move between window panes with ctrl+j
   this.neat.input.on('alt-n', () => {
-    var currentIdx = self.state.windowPanes.indexOf(self.state.selectedWindowPane)
+    var currentIdx = this.state.windowPanes.indexOf(this.state.selectedWindowPane)
     if (currentIdx !== -1) {
       currentIdx++
       currentIdx = currentIdx % self.state.windowPanes.length
@@ -115,36 +109,36 @@ function NeatScreen (props) {
   // move up/down channels with ctrl+{n,p}
   this.neat.input.on('ctrl-p', () => {
     var currentIdx
-    if (self.state.selectedWindowPane === 'cabals') {
-      currentIdx = self.state.cabals.findIndex((cabal) => cabal.key === self.commander.cabal.key)
+    if (this.state.selectedWindowPane === 'cabals') {
+      currentIdx = this.state.cabals.findIndex((cabal) => cabal.key === this.commander.cabal.key)
       if (currentIdx !== -1) {
         currentIdx--
-        if (currentIdx < 0) currentIdx = self.state.cabals.length - 1
+        if (currentIdx < 0) currentIdx = this.state.cabals.length - 1
         setCabalByIndex(currentIdx)
       }
     } else {
-      currentIdx = self.state.cabal.client.channels.indexOf(self.commander.channel)
+      currentIdx = this.state.cabal.client.channels.indexOf(this.commander.channel)
       if (currentIdx !== -1) {
         currentIdx--
-        if (currentIdx < 0) currentIdx = self.state.cabal.client.channels.length - 1
+        if (currentIdx < 0) currentIdx = this.state.cabal.client.channels.length - 1
         setChannelByIndex(currentIdx)
       }
     }
   })
   this.neat.input.on('ctrl-n', () => {
     var currentIdx
-    if (self.state.selectedWindowPane === 'cabals') {
-      currentIdx = self.state.cabals.findIndex((cabal) => cabal.key === self.commander.cabal.key)
+    if (this.state.selectedWindowPane === 'cabals') {
+      currentIdx = this.state.cabals.findIndex((cabal) => cabal.key === this.commander.cabal.key)
       if (currentIdx !== -1) {
         currentIdx++
-        currentIdx = currentIdx % self.state.cabals.length
+        currentIdx = currentIdx % this.state.cabals.length
         setCabalByIndex(currentIdx)
       }
     } else {
-      currentIdx = self.state.cabal.client.channels.indexOf(self.commander.channel)
+      currentIdx = this.state.cabal.client.channels.indexOf(this.commander.channel)
       if (currentIdx !== -1) {
         currentIdx++
-        currentIdx = currentIdx % self.state.cabal.client.channels.length
+        currentIdx = currentIdx % this.state.cabal.client.channels.length
         setChannelByIndex(currentIdx)
       }
     }
@@ -167,31 +161,42 @@ function NeatScreen (props) {
   }
 
   this.neat.input.on('ctrl-d', () => process.exit(0))
-  this.neat.input.on('pageup', () => self.state.cabal.client.scrollback++)
-  this.neat.input.on('pagedown', () => { self.state.cabal.client.scrollback = Math.max(0, self.state.cabal.client.scrollback - 1); return null })
+  this.neat.input.on('pageup', () => this.state.scrollback++)
+  this.neat.input.on('pagedown', () => { this.state.scrollback = Math.max(0, this.state.scrollback - 1); return null })
 
-  this.neat.use(function (state, bus) {
-    state.neat = self.neat
-    self.state = state
-    self.bus = bus
+  this.neat.use((state, bus) => {
+    state.neat = this.neat
+    this.state = state
+    this.bus = bus
 
-    self.state.cabals = props.cabals
-    self.state.cabal = props.cabals[0]
+    this.state.messages = []
+    this.state.cabalKey = ''
+    Object.defineProperty(this.state, 'cabal', {
+      get: () => {
+        return this.client.cabalToDetails()
+      }
+    })
+    Object.defineProperty(this.state, 'cabals', {
+      get: () => {
+        return this.client.getCabalKeys()
+      }
+    })
 
     state.selectedWindowPane = 'channels'
     state.windowPanes = [state.selectedWindowPane]
-    if (state.cabals.length > 1) {
-      state.windowPanes.push('cabals')
-    }
-
-    self.state.cabals.forEach((cabal) => {
-      self.initializeCabalClient(cabal)
-    })
   })
 }
 
 NeatScreen.prototype.initializeCabalClient = function (cabal) {
-  this.client = new Client(cabal)
+  this.client.addCabal(cabal).then((details) => {
+    this.state.cabal = details
+    this.cabalKey = cabal.key
+    details.on('update', (details) => {
+      this.state.cabal = details
+      this.bus.emit('render')
+    })
+    this.client.openChannel("default")
+  })
   // {
   //   channel: '!status',
   //   channels: ['!status'],
@@ -200,95 +205,91 @@ NeatScreen.prototype.initializeCabalClient = function (cabal) {
   //   users: {}
   // }
 
-  this.commander.commands.help.call()
-  self.state.cabal.client = cabal.client
 
-  cabal.ready(function () {
-    cabal.channels.get((err, channels) => {
-      if (err) return
-      cabal.client.channels = cabal.client.channels.concat(channels)
-      self.loadChannel(cabal.client.channel)
-      self.bus.emit('render')
+  // cabal.ready(function () {
+  //   cabal.channels.get((err, channels) => {
+  //     if (err) return
+  //     cabal.client.channels = cabal.client.channels.concat(channels)
+      // self.loadChannel(cabal.client.channel)
 
-      cabal.channels.events.on('add', function (channel) {
-        cabal.client.channels.push(channel)
-        cabal.client.channels.sort()
-        self.bus.emit('render')
-      })
-    })
+      // cabal.channels.events.on('add', function (channel) {
+      //   cabal.client.channels.push(channel)
+      //   cabal.client.channels.sort()
+      // })
+    // })
 
-    cabal.users.getAll(function (err, users) {
-      if (err) return
-      cabal.client.users = users
+    // cabal.users.getAll(function (err, users) {
+    //   if (err) return
+    //   cabal.client.users = users
 
-      updateLocalKey()
+    //   updateLocalKey()
 
-      cabal.users.events.on('update', function (key) {
-        // TODO: rate-limit
-        cabal.users.get(key, function (err, user) {
-          if (err) return
-          cabal.client.users[key] = Object.assign(cabal.client.users[key] || {}, user)
-          if (cabal.client.user && key === cabal.client.user.key) cabal.client.user = cabal.client.users[key]
-          if (!cabal.client.user) updateLocalKey()
-          self.bus.emit('render')
-        })
+    //   cabal.users.events.on('update', function (key) {
+    //     // TODO: rate-limit
+    //     cabal.users.get(key, function (err, user) {
+    //       if (err) return
+    //       cabal.client.users[key] = Object.assign(cabal.client.users[key] || {}, user)
+    //       if (cabal.client.user && key === cabal.client.user.key) cabal.client.user = cabal.client.users[key]
+    //       if (!cabal.client.user) updateLocalKey()
+    //       self.bus.emit('render')
+    //     })
 
-        cabal.topics.events.on('update', function (msg) {
-          self.state.topic = msg.value.content.topic
-          self.bus.emit('render')
-        })
-      })
+    //     cabal.topics.events.on('update', function (msg) {
+    //       self.state.topic = msg.value.content.topic
+    //       self.bus.emit('render')
+    //     })
+    //   })
 
-      cabal.on('peer-added', function (key) {
-        var found = false
-        Object.keys(cabal.client.users).forEach(function (k) {
-          if (k === key) {
-            cabal.client.users[k].online = true
-            found = true
-          }
-        })
-        if (!found) {
-          cabal.client.users[key] = {
-            key: key,
-            online: true
-          }
-        }
-        self.bus.emit('render')
-      })
-      cabal.on('peer-dropped', function (key) {
-        Object.keys(cabal.client.users).forEach(function (k) {
-          if (k === key) {
-            cabal.client.users[k].online = false
-            self.bus.emit('render')
-          }
-        })
-      })
+    //   cabal.on('peer-added', function (key) {
+    //     var found = false
+    //     Object.keys(cabal.client.users).forEach(function (k) {
+    //       if (k === key) {
+    //         cabal.client.users[k].online = true
+    //         found = true
+    //       }
+    //     })
+    //     if (!found) {
+    //       cabal.client.users[key] = {
+    //         key: key,
+    //         online: true
+    //       }
+    //     }
+    //     self.bus.emit('render')
+    //   })
+    //   cabal.on('peer-dropped', function (key) {
+    //     Object.keys(cabal.client.users).forEach(function (k) {
+    //       if (k === key) {
+    //         cabal.client.users[k].online = false
+    //         self.bus.emit('render')
+    //       }
+    //     })
+    //   })
 
-      function updateLocalKey () {
-        cabal.getLocalKey(function (err, lkey) {
-          // set local key for local user
-          cabal.client.user.key = lkey
-          if (err) return self.bus.emit('render')
-          // try to get more data for user
-          Object.keys(users).forEach(function (key) {
-            if (key === lkey) {
-              cabal.client.user = users[key]
-              cabal.client.user.local = true
-              cabal.client.user.online = true
-            }
-          })
-          self.bus.emit('render')
-        })
-      }
-    })
-  })
+    //   function updateLocalKey () {
+    //     cabal.getLocalKey(function (err, lkey) {
+    //       // set local key for local user
+    //       cabal.client.user.key = lkey
+    //       if (err) return self.bus.emit('render')
+    //       // try to get more data for user
+    //       Object.keys(users).forEach(function (key) {
+    //         if (key === lkey) {
+    //           cabal.client.user = users[key]
+    //           cabal.client.user.local = true
+    //           cabal.client.user.online = true
+    //         }
+    //       })
+    //       self.bus.emit('render')
+    //     })
+    //   }
+    // })
+  // })
 }
 
 NeatScreen.prototype.addCabal = function (key) {
   if (!self.isExperimental) { return }
   this.client.addCabal(key).then((cabal) => {
     this.showCabal(cabal)
-    this.config.cabals = self.state.cabals.map((cabal) => cabal.key)
+    this.config.cabals = this.client.getCabalKeys()
     saveConfig(this.config, this.configFilePath)
   })
 }
@@ -309,36 +310,33 @@ function renderApp (state) {
 // use to write anything else to the screen, e.g. info iessages or emotes
 NeatScreen.prototype.writeLine = function (line) {
   var msg = `${chalk.dim(line)}`
-  this.state.cabal.client.messages.push(msg)
+  this.state.messages.push(msg)
   statusMessages.push(util.wrapStatusMsg(msg))
   this.bus.emit('render')
 }
 
 NeatScreen.prototype.clear = function () {
-  this.state.cabal.client.messages = []
+  this.state.messages = []
   this.bus.emit('render')
 }
 
 NeatScreen.prototype.loadChannel = function (channel) {
-  var self = this
-  if (self.state.cabal.client.msgListener) {
-    self.state.cabal.messages.events.removeListener(self.state.cabal.client.channel, self.state.cabal.client.msgListener)
+  const self = this
+  if (this.state.msgListener) {
+    this.state.cabal.messages.events.removeListener(self.state.cabal.client.channel, self.state.cabal.client.msgListener)
     self.state.cabal.client.msgListener = null
   }
-
-  // This is really cheap, so we could load many more if we wanted to!
-  var MAX_MESSAGES = process.stdout.rows - HEADER_ROWS + 50
 
   self.state.cabal.client.channel = channel
 
   // clear the old channel state
-  self.state.cabal.client.scrollback = 0
-  self.state.cabal.client.messages = []
+  self.state.scrollback = 0
+  self.state.messages = []
   self.state.topic = ''
   self.neat.render()
 
   if (channel === '!status') {
-    self.state.cabal.client.messages = statusMessages.map(self.formatMessage)
+    self.state.messages = statusMessages.map(self.formatMessage)
     self.neat.render()
     return
   }
@@ -357,16 +355,16 @@ NeatScreen.prototype.loadChannel = function (channel) {
       if (err) return
       msgs.reverse()
 
-      self.state.cabal.client.messages = []
+      self.state.messages = []
       var latestTimestamp = new Date(0)
 
       msgs.forEach(function (msg) {
         var msgDate = new Date(msg.value.timestamp)
         if (strftime('%F', msgDate) > strftime('%F', latestTimestamp)) {
           latestTimestamp = msgDate
-          self.state.cabal.client.messages.push(`${chalk.gray('day changed to ' + strftime('%e %b %Y', latestTimestamp))}`)
+          self.state.messages.push(`${chalk.gray('day changed to ' + strftime('%e %b %Y', latestTimestamp))}`)
         }
-        self.state.cabal.client.messages.push(self.formatMessage(msg))
+        self.state.messages.push(self.formatMessage(msg))
       })
 
       self.neat.render()
@@ -414,7 +412,7 @@ NeatScreen.prototype.formatMessage = function (msg) {
   */
   if (!msg.value.type) { msg.value.type = 'chat/text' }
   if (msg.value.content && msg.value.timestamp) {
-    const users = this.client.getUsers(this.state && this.state.cabal)
+    const users = this.client.getUsers()
     const authorSource = users[msg.key] || msg
 
     const author = authorSource.name || authorSource.key.slice(0, 8)

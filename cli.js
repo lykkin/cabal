@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-var Cabal = require('cabal-core')
+var Client = require('cabal-client')
 var minimist = require('minimist')
 var os = require('os')
 var fs = require('fs')
@@ -7,16 +7,12 @@ var path = require('path')
 var yaml = require('js-yaml')
 var mkdirp = require('mkdirp')
 var frontend = require('./neat-screen.js')
-var crypto = require('hypercore-crypto')
 var chalk = require('chalk')
-var ram = require('random-access-memory')
-var level = require('level')
-var memdb = require('memdb')
 
 var args = minimist(process.argv.slice(2))
 
 var homedir = os.homedir()
-var rootdir = args.dir || (homedir + `/.cabal/v${Cabal.databaseVersion}`)
+var rootdir = args.dir || (homedir + `/.cabal/v${Client.getDatabaseVersion()}`)
 var rootconfig = `${rootdir}/config.yml`
 var archivesdir = `${rootdir}/archives/`
 
@@ -63,10 +59,23 @@ if (args.help || args.h) {
   process.exit(1)
 }
 
+
 var config
 var cabalKeys = []
 var configFilePath = findConfigPath()
 var maxFeeds = 1000
+
+// This is really cheap, so we could load many more if we wanted to!
+const HEADER_ROWS = 6
+const MAX_MESSAGES = process.stdout.rows - HEADER_ROWS + 50
+const client = new Client({
+  maxFeeds: maxFeeds,
+  pageSize: MAX_MESSAGES,
+  config: {
+    dbdir: archivesdir,
+    temp: args.temp
+  }
+})
 
 // make sure the .cabal/v<databaseVersion> folder exists
 mkdirp.sync(rootdir)
@@ -157,36 +166,16 @@ if (!args.experimental && cabalKeys.length) {
   cabalKeys = [firstKey]
 }
 
-function createCabal (key) {
-  key = key.replace('cabal://', '').replace('cbl://', '').replace('dat://', '').replace(/\//g, '')
-  var storage = args.temp ? ram : archivesdir + key
-  if (!args.temp) try { mkdirp.sync(path.join(archivesdir, key, 'views')) } catch (e) {}
-  var db = args.temp ? memdb() : level(path.join(archivesdir, key, 'views'))
-  return Cabal(storage, key, {db: db, maxFeeds: maxFeeds})
-}
-
 // create and join a new cabal
 if (args.new) {
-  var key = crypto.keyPair().publicKey.toString('hex')
-  var cabal = createCabal(key)
-  console.error(`created the cabal: ${chalk.greenBright('cabal://' + key)}`) // log to terminal output (stdout is occupied by interface)
-  cabal.ready(function () {
+  client.createCabal().then((cabal) => {
+    console.error(`created the cabal: ${chalk.greenBright('cabal://' + key)}`) // log to terminal output (stdout is occupied by interface)
     if (!args.seed) {
-      start([cabal])
+      start([cabal.key])
     }
   })
 } else if (cabalKeys.length) {
-  // join the specified list of cabals
-  Promise.all(cabalKeys.map((key) => {
-    var cabal = createCabal(key)
-    return new Promise((resolve) => {
-      cabal.ready(() => {
-        resolve(cabal)
-      })
-    })
-  })).then((cabals) => {
-    start(cabals)
-  })
+  start(cabalKeys)
 } else {
   process.stderr.write(usage)
   process.exit(1)
@@ -212,28 +201,29 @@ function start (cabals) {
       // unsure about this, it effectively removes all of the cabals in the config
       // but then again we don't have a method to save them either right now so
       // let's run with it and fix after the bugs
-      config.cabals = cabals.map((c) => c.key)
+      config.cabals = cabals
       saveConfig(configFilePath, config)
     }
 
-    var dbVersion = Cabal.databaseVersion
+    cabals.forEach(client.addCabal.bind(client))
+
     var isExperimental = (typeof args.experimental !== 'undefined')
     frontend({
+      client,
       isExperimental,
       archivesdir,
       cabals,
       configFilePath,
       homedir,
-      dbVersion,
       maxFeeds,
       config,
       rootdir
     })
-    setTimeout(() => {
-      cabals.forEach((cabal) => {
-        cabal.swarm()
-      })
-    }, 300)
+    // setTimeout(() => {
+    //   cabals.forEach((cabal) => {
+    //     cabal.swarm()
+    //   })
+    // }, 300)
   } else {
     cabals.forEach((cabal) => {
       console.log('Seeding', cabal.key)
@@ -275,17 +265,13 @@ function saveConfig (path, config) {
 
 function publishSingleMessage ({key, channel, message, messageType, timeout}) {
   console.log(`Publishing message to channel - ${channel || 'default'}: ${message}`)
-  var db = args.temp ? memdb() : level(path.join(archivesdir, key, 'views'))
-  var cabal = Cabal(archivesdir + key, key, {db: db, maxFeeds: maxFeeds})
-  cabal.ready(() => {
-    cabal.publish({
+  client.addCabal(key).then(cabal => cabal.publishMessage({
       type: messageType || 'chat/text',
       content: {
         channel: channel || 'default',
         text: message
       }
     })
-    cabal.swarm()
-    setTimeout(function () { process.exit(0) }, timeout || 5000)
-  })
+  )
+  setTimeout(function () { process.exit(0) }, timeout || 5000)
 }

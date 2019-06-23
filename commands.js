@@ -21,7 +21,7 @@ function Commander (view, cabal) {
     emote: {
       help: () => 'write an old-school text emote',
       call: (arg) => {
-        self.cabal.publish({
+        self.cabal.publishMessage({
           type: 'chat/emote',
           content: {
             channel: self.channel,
@@ -33,28 +33,24 @@ function Commander (view, cabal) {
     names: {
       help: () => 'display the names of the currently online peers',
       call: (arg) => {
-        self.cabal.users.getAll(function (err, users) {
-          if (err) { return }
-          var userkeys = Object.keys(users).map((key) => users[key]).sort(util.cmpUser)
-          self.view.writeLine('* history of peers in this cabal:')
-          userkeys.map((u) => {
-            var username = u.name || 'conspirator'
-            var spaces = ' '.repeat(15)
-            var paddedName = (username + spaces).slice(0, spaces.length)
-            self.view.writeLine.bind(self.view)(`  ${paddedName} ${u.key}`)
-          })
+        var users = self.cabal.getUsers()
+        var userkeys = Object.keys(users).map((key) => users[key]).sort(util.cmpUser)
+        self.view.writeLine('* history of peers in this cabal:')
+        userkeys.map((u) => {
+          var username = u.name || 'conspirator'
+          var spaces = ' '.repeat(15)
+          var paddedName = (username + spaces).slice(0, spaces.length)
+          self.view.writeLine.bind(self.view)(`  ${paddedName} ${u.key}`)
         })
-      }
+    }
     },
     channels: {
       help: () => "display the cabal's channels",
       call: (arg) => {
-        self.cabal.channels.get((err, channels) => {
-          if (err) return
-          self.view.writeLine('* channels:')
-          channels.map((m) => {
-            self.view.writeLine.bind(self.view)(`  ${m}`)
-          })
+        var channels = self.cabal.getChannels()
+        self.view.writeLine('* channels:')
+        channels.map((m) => {
+          self.view.writeLine.bind(self.view)(`  ${m}`)
         })
       }
     },
@@ -63,7 +59,8 @@ function Commander (view, cabal) {
       call: (arg) => {
         if (arg === '') arg = 'default'
         self.channel = arg
-        self.view.loadChannel(arg)
+        self.cabal.joinChannel(arg)
+        // self.view.loadChannel(arg) ???
       }
     },
     clear: {
@@ -106,7 +103,7 @@ function Commander (view, cabal) {
     whoami: {
       help: () => 'display your local user key',
       call: (arg) => {
-        self.view.writeLine.bind(self.view)('Local user key: ' + self.cabal.client.user.key)
+        self.view.writeLine.bind(self.view)('Local user key: ' + self.cabal.getLocalUser().key)
       }
     }
   }
@@ -160,7 +157,7 @@ Commander.prototype.process = function (line) {
   } else {
     line = line.trim()
     if (line !== '') {
-      self.cabal.publish({
+      self.cabal.publishMessage({
         type: 'chat/text',
         content: {
           channel: self.channel,

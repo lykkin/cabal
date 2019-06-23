@@ -72,21 +72,21 @@ function big (state) {
 }
 
 function linkSize (state) {
-  if (state.cabal.key) return `cabal://${state.cabal.key.toString('hex')}`.length
+  if (state.cabalKey) return `cabal://${state.cabalKey.toString('hex')}`.length
   else return 'cabal://...'
 }
 
 function renderPrompt (state) {
-  var name = state.cabal.client.user ? (state.cabal.client.user.name || state.cabal.client.user.key.substring(0, 8)) : 'unknown'
+  var name = state.cabal.user ? (state.cabal.user.name || state.cabal.user.key.substring(0, 8)) : 'unknown'
   return [
-    `[${chalk.cyan(name)}:${state.cabal.client.channel}] ${state.neat.input.line()}`
+    `[${chalk.cyan(name)}:${state.cabal.currentChannel}] ${state.neat.input.line()}`
   ]
 }
 
 function renderTitlebar (state, width) {
   return [
     chalk.bgBlue(util.centerText(chalk.white.bold(`CABAL@${version}`), width)),
-    util.rightAlignText(chalk.white(`cabal://${state.cabal.key.toString('hex')}`), width)
+    util.rightAlignText(chalk.white(`cabal://${state.cabalKey.toString('hex')}`), width)
   ]
 }
 
@@ -95,7 +95,7 @@ function renderCabals (state, width, height) {
     .map(function (cabal, idx) {
       var key = cabal.key
       var keyTruncated = key.substring(0, 4)
-      if (state.cabal.key === key) {
+      if (state.cabalKey === key) {
         var fill = ' '
         if (state.selectedWindowPane === 'cabals') {
           return '>' + chalk.bgBlue(keyTruncated + fill)
@@ -109,10 +109,10 @@ function renderCabals (state, width, height) {
 }
 
 function renderChannels (state, width, height) {
-  return state.cabal.client.channels
+  return state.cabal.getChannels()
     .map(function (channel, idx) {
       var channelTruncated = channel.substring(0, width - 3)
-      if (state.cabal.client.channel === channel) {
+      if (state.cabal.currentChannel === channel) {
         var fillWidth = width - channelTruncated.length - 3
         var fill = (fillWidth > 0) ? new Array(fillWidth).fill(' ').join('') : ''
         if (state.selectedWindowPane === 'channels') {
@@ -137,8 +137,9 @@ function renderHorizontalLine (chr, width, chlk) {
 }
 
 function renderNicks (state, width, height) {
-  var users = Object.keys(state.cabal.client.users)
-    .map(key => state.cabal.client.users[key])
+  var users = state.cabal.getUsers()
+  users = Object.keys(users)
+    .map(key => users[key])
     .sort(util.cmpUser)
   var onlines = {}
 
@@ -173,7 +174,7 @@ function renderChannelTopic (state, width, height) {
 }
 
 function renderMessages (state, width, height) {
-  var msgs = state.cabal.client.messages
+  var msgs = state.messages
 
   // Character-wrap to area edge
   var allLines = msgs.reduce(function (accum, msg) {
@@ -181,18 +182,18 @@ function renderMessages (state, width, height) {
     return accum
   }, [])
 
-  state.cabal.client.scrollback = Math.min(state.cabal.client.scrollback, allLines.length - height)
+  state.scrollback = Math.min(state.scrollback, allLines.length - height)
   if (allLines.length < height) {
-    state.cabal.client.scrollback = 0
+    state.scrollback = 0
   }
 
   var lines = (allLines.length < height)
     ? allLines.concat(Array(height - allLines.length).fill(''))
     : allLines.slice(
-      allLines.length - height - state.cabal.client.scrollback,
-      allLines.length - state.cabal.client.scrollback
+      allLines.length - height - state.scrollback,
+      allLines.length - state.scrollback
     )
-  if (state.cabal.client.scrollback > 0) {
+  if (state.scrollback > 0) {
     lines = lines.slice(0, lines.length - 2).concat(['', 'More messages below . . .'])
   }
   return lines
